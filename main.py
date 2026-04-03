@@ -14,391 +14,472 @@ import shap
 from openai import OpenAI
 import os
 
-# --- setup ---
-n_gstin = 50
-days = 60
 
-gstins = [f"B{i}" for i in range(n_gstin)]
-dates = pd.date_range(start="2026-01-01", periods=days)
+#Generate Synthetic Data 
 
-# assign business types
-types = np.random.choice(["high", "medium", "low"], size=n_gstin, p=[0.3, 0.5, 0.2])
-business_type = dict(zip(gstins, types))
+def generate_raw_data(n_gstin,days):
+    import pandas as pd
+    import numpy as np
 
-rows = []
+    gstins = [f"B{i}" for i in range(n_gstin)]
+    dates = pd.date_range(start="2026-01-01", periods=days)
 
-for g in gstins:
-    t = business_type[g]
-    
-    # base values by type
-    if t == "high":
-        base_inv = np.random.randint(80, 150)
-        base_inflow = np.random.randint(5000, 10000)
-        delay_range = (0, 2)
-    elif t == "medium":
-        base_inv = np.random.randint(30, 80)
-        base_inflow = np.random.randint(2000, 5000)
-        delay_range = (1, 4)
-    else:
-        base_inv = np.random.randint(5, 30)
-        base_inflow = np.random.randint(500, 2000)
-        delay_range = (3, 8)
+    # assign business types
+    types = np.random.choice(["high", "medium", "low"], size=n_gstin, p=[0.3, 0.5, 0.2])
+    business_type = dict(zip(gstins, types))
 
-    for d in dates:
+    rows = []
+
+    for g in gstins:
+        t = business_type[g]
         
-        # variation
-        invoices = int(base_inv * np.random.uniform(0.8, 1.2))
-        invoice_amount = invoices * np.random.randint(50, 100)
+        # base values by type
+        if t == "high":
+            base_inv = np.random.randint(80, 150)
+            base_inflow = np.random.randint(5000, 10000)
+            delay_range = (0, 2)
+        elif t == "medium":
+            base_inv = np.random.randint(30, 80)
+            base_inflow = np.random.randint(2000, 5000)
+            delay_range = (1, 4)
+        else:
+            base_inv = np.random.randint(5, 30)
+            base_inflow = np.random.randint(500, 2000)
+            delay_range = (3, 8)
 
-        upi_inflow = int(base_inflow * np.random.uniform(0.8, 1.2))
-        upi_outflow = int(upi_inflow * np.random.uniform(0.6, 0.9))
+        for d in dates:
+            
+            # variation
+            invoices = int(base_inv * np.random.uniform(0.8, 1.2))
+            invoice_amount = invoices * np.random.randint(50, 100)
 
-        txn_count = int(invoices * np.random.uniform(0.5, 1.5))
-        eway_count = int(invoices * np.random.uniform(0.1, 0.3))
+            upi_inflow = int(base_inflow * np.random.uniform(0.8, 1.2))
+            upi_outflow = int(upi_inflow * np.random.uniform(0.6, 0.9))
 
-        filing_delay_days = np.random.randint(*delay_range)
+            txn_count = int(invoices * np.random.uniform(0.5, 1.5))
+            eway_count = int(invoices * np.random.uniform(0.1, 0.3))
 
-        rows.append([
-            g, d, invoices, invoice_amount,
-            upi_inflow, upi_outflow, txn_count,
-            eway_count, filing_delay_days
-        ])
+            filing_delay_days = np.random.randint(*delay_range)
 
-# final dataframe
-df = pd.DataFrame(rows, columns=[
-    "GSTIN",
-    "Date",
-    "invoices_count",
-    "invoice_amount",
-    "upi_inflow",
-    "upi_outflow",
-    "txn_count",
-    "eway_count",
-    "filing_delay_days"
-])
+            rows.append([
+                g, d, invoices, invoice_amount,
+                upi_inflow, upi_outflow, txn_count,
+                eway_count, filing_delay_days
+            ])
 
-#Example:You buy stock (₹10,000 outflow),Sell later (₹5,000 inflow today)👉 So:,outflow > inflow ✅ (valid case)
-df = df.drop_duplicates(subset=['GSTIN', 'Date'])
+    # final dataframe
+    df = pd.DataFrame(rows, columns=[
+        "GSTIN",
+        "Date",
+        "invoices_count",
+        "invoice_amount",
+        "upi_inflow",
+        "upi_outflow",
+        "txn_count",
+        "eway_count",
+        "filing_delay_days"
+    ])
 
-df = df.sort_values(["GSTIN", "Date"])
+    return df
 
-mask = np.random.rand(len(df)) < 0.02
-df.loc[mask, "upi_inflow"] = np.nan
+def clean_data(df):
+    import numpy as np
 
-mask2 = np.random.rand(len(df)) < 0.02
-df.loc[mask2, "txn_count"] = np.nan
+    df = df.drop_duplicates(subset=['GSTIN', 'Date'])
 
-df["upi_inflow"] = df.groupby("GSTIN")["upi_inflow"].ffill().bfill()
-df["upi_outflow"] = df.groupby("GSTIN")["upi_outflow"].ffill().bfill()
+    df = df.sort_values(["GSTIN", "Date"])
 
-cols = [
-    "invoice_amount",
-    "txn_count",
-    "eway_count",
-    "filing_delay_days"
-]
+    mask = np.random.rand(len(df)) < 0.02
+    df.loc[mask, "upi_inflow"] = np.nan
 
-for col in cols:
-    df[col] = df[col].fillna(df.groupby("GSTIN")[col].transform("median"))
+    mask2 = np.random.rand(len(df)) < 0.02
+    df.loc[mask2, "txn_count"] = np.nan
+
+    df["upi_inflow"] = df.groupby("GSTIN")["upi_inflow"].ffill().bfill()
+    df["upi_outflow"] = df.groupby("GSTIN")["upi_outflow"].ffill().bfill()
+
+    cols = [
+        "invoice_amount",
+        "txn_count",
+        "eway_count",
+        "filing_delay_days"
+    ]
+
+    for col in cols:
+        df[col] = df[col].fillna(df.groupby("GSTIN")[col].transform("median"))
+
+    return df
 
 # --- FEATURE ENGINEERING ---
+def feature_engineering(df):
+    import numpy as np
+
+    # --- Rolling Features ---
+    df['rolling_avg_inflow'] = (
+        df.groupby('GSTIN')['upi_inflow']
+          .rolling(window=7, min_periods=1)
+          .mean()
+          .reset_index(level=0, drop=True)
+    )
+
+    df['rolling_avg_outflow'] = (
+        df.groupby('GSTIN')['upi_outflow']
+          .rolling(window=7, min_periods=1)
+          .mean()
+          .reset_index(level=0, drop=True)
+    )
+
+    df['rolling_txn_count'] = (
+        df.groupby('GSTIN')['txn_count']
+          .rolling(window=7, min_periods=1)
+          .mean()
+          .reset_index(level=0, drop=True)
+    )
 
-df['rolling_avg_inflow'] = (
-    df.groupby('GSTIN')['upi_inflow']
-      .rolling(window=7, min_periods=1)
-      .mean()
-      .reset_index(level=0, drop=True)
-)
-
-df['rolling_avg_outflow'] = (
-    df.groupby('GSTIN')['upi_outflow']
-      .rolling(window=7, min_periods=1)
-      .mean()
-      .reset_index(level=0, drop=True)
-)
-
-df['rolling_txn_count'] = (
-    df.groupby('GSTIN')['txn_count']
-      .rolling(window=7, min_periods=1)
-      .mean()
-      .reset_index(level=0, drop=True)
-)
-
-df['inflow_outflow_ratio'] = df['upi_inflow'] / (df['upi_outflow'] + 1e-5)
-df['filing_velocity'] = 1 / (1 + df['filing_delay_days'])
-
-df['avg_delay'] = df.groupby('GSTIN')['filing_delay_days'].transform('mean')
-
-df['net_cash'] = df['upi_inflow'] - df['upi_outflow']
+    df['inflow_outflow_ratio'] = df['upi_inflow'] / (df['upi_outflow'] + 1e-5)
+    df['filing_velocity'] = 1 / (1 + df['filing_delay_days'])
+
+    df['avg_delay'] = df.groupby('GSTIN')['filing_delay_days'].transform('mean')
+
+    df['net_cash'] = df['upi_inflow'] - df['upi_outflow']
+
+    df['rolling_cashflow_std'] = (
+        df.groupby('GSTIN')['net_cash']
+          .rolling(window=7, min_periods=1)
+          .std()
+          .reset_index(level=0, drop=True)
+    )
+
+    df['invoice_growth_rate'] = df.groupby('GSTIN')['invoice_amount'].pct_change().fillna(0)
+    df['inflow_growth_rate'] = df.groupby('GSTIN')['upi_inflow'].pct_change().fillna(0)
+    df['shipping_growth'] = df.groupby('GSTIN')['eway_count'].pct_change().fillna(0)
+
+    df['activity_score'] = df['invoices_count'] + df['txn_count'] + df['eway_count']
+
+    df['txn_variance'] = df.groupby('GSTIN')['txn_count'].transform('var').fillna(0)
+
+    df.drop(columns=['net_cash'], inplace=True)
 
-df['rolling_cashflow_std'] = (
-    df.groupby('GSTIN')['net_cash']
-      .rolling(window=7, min_periods=1)
-      .std()
-      .reset_index(level=0, drop=True)
-)
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+
+    df['shipping_growth'] = df.groupby('GSTIN')['eway_count'].transform(
+        lambda x: x.pct_change().replace([np.inf, -np.inf], 0).fillna(0)
+    )
 
-df['invoice_growth_rate'] = df.groupby('GSTIN')['invoice_amount'].pct_change().fillna(0)
-df['inflow_growth_rate'] = df.groupby('GSTIN')['upi_inflow'].pct_change().fillna(0)
-df['shipping_growth'] = df.groupby('GSTIN')['eway_count'].pct_change().fillna(0)
-
-df['activity_score'] = df['invoices_count'] + df['txn_count'] + df['eway_count']
-
-df['txn_variance'] = df.groupby('GSTIN')['txn_count'].transform('var').fillna(0)
-
-df.drop(columns=['net_cash'], inplace=True)
-
-df.replace([np.inf, -np.inf], 0, inplace=True)
-df['shipping_growth'] = df.groupby('GSTIN')['eway_count'].transform(
-    lambda x: x.pct_change().replace([np.inf, -np.inf], 0).fillna(0)
-)
-df[col] = np.log1p(df[col].abs()) * np.sign(df[col])
-
-minmax_scaler = MinMaxScaler()
-df['filing_delay_days'] = minmax_scaler.fit_transform(df[['filing_delay_days']])
-
-# --- GROUP FEATURES BY TYPE ---
-# --- Correct feature groups ---
-amount_cols = ['invoice_amount', 'upi_inflow', 'upi_outflow']
-count_cols = ['invoices_count', 'txn_count', 'eway_count', 'activity_score',
-              'rolling_txn_count', 'rolling_avg_inflow', 'rolling_avg_outflow']
-ratio_cols = ['inflow_outflow_ratio']
-velocity_cols = ['filing_velocity']
-avg_cols = ['avg_delay']  # rolling or avg features that are not counts
-growth_cols = ['invoice_growth_rate', 'inflow_growth_rate', 'shipping_growth']
-variance_cols = ['txn_variance', 'rolling_cashflow_std']
-
-# --- 1️⃣ LOG TRANSFORM AMOUNTS, GROWTH, VARIANCE (reduce skew) ---
-# --- 1️⃣ LOG transform skewed numeric features ---
-# --- handle inf / NaN globally ---
-df.replace([np.inf, -np.inf], 0, inplace=True)
-df.fillna(0, inplace=True)
-
-# --- 1️⃣ LOG transform skewed numeric features ---
-for col in amount_cols + growth_cols + variance_cols:
-    df[col] = np.log1p(df[col].abs()) * np.sign(df[col])
-
-log_std_cols = amount_cols + growth_cols + variance_cols
-scaler = StandardScaler()
-df[log_std_cols] = scaler.fit_transform(df[log_std_cols])
-
-
-robust_cols = count_cols + avg_cols + ['filing_delay_days']
-df[robust_cols] = RobustScaler().fit_transform(df[robust_cols])
-
-# --- 3️⃣ StandardScaler for ratios & velocities ---
-std_scaler = StandardScaler()
-df[ratio_cols + velocity_cols] = std_scaler.fit_transform(df[ratio_cols + velocity_cols])
-
-for col in variance_cols:
-    df[col] = df[col] + np.random.normal(0, 1e-6, size=len(df))
-
-# --- Check first row after scaling ---
-row_idx = 0
-print(df.loc[row_idx])
-
-
+    return df
 
-# Features for clustering
-feature_cols = (
-    amount_cols + count_cols + ratio_cols + velocity_cols +
-    avg_cols + growth_cols + variance_cols
-)
-for col in feature_cols:
-    if col not in df.columns:
-        print(f"Missing column: {col}") 
-X = df[feature_cols]
 
-print(df[feature_cols].isnull().sum())  # NaNs
-print((np.isinf(df[feature_cols])).sum()) 
+def preprocess_and_reduce(df):
+    import numpy as np
+    from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
+    from sklearn.decomposition import PCA
 
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(df[feature_cols])
+    # --- Feature Groups ---
+    amount_cols = ['invoice_amount', 'upi_inflow', 'upi_outflow']
+    count_cols = ['invoices_count', 'txn_count', 'eway_count', 'activity_score',
+                  'rolling_txn_count', 'rolling_avg_inflow', 'rolling_avg_outflow']
+    ratio_cols = ['inflow_outflow_ratio']
+    velocity_cols = ['filing_velocity']
+    avg_cols = ['avg_delay']
+    growth_cols = ['invoice_growth_rate', 'inflow_growth_rate', 'shipping_growth']
+    variance_cols = ['txn_variance', 'rolling_cashflow_std']
 
-pca = PCA(n_components=0.95, random_state=42)
-X_pca = pca.fit_transform(X_scaled)
+    # --- Clean ---
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    df.fillna(0, inplace=True)
 
-# Fit KMeans
-kmeans = KMeans(n_clusters=5, random_state=42)
-df['daily_cluster'] = kmeans.fit_predict(X_pca) # daily cluster for each GSTIN-date point
+    # --- Log Transform ---
+    for col in amount_cols + growth_cols + variance_cols:
+        df[col] = np.log1p(np.abs(df[col])) * np.sign(df[col])
 
-# Compute overall GSTIN cluster (most frequent daily cluster)
-gstin_cluster = df.groupby('GSTIN')['daily_cluster'] \
-                  .agg(lambda x: x.value_counts().idxmax()) \
-                  .reset_index()
+    # --- Scaling ---
+    df[amount_cols + growth_cols + variance_cols] = StandardScaler().fit_transform(
+        df[amount_cols + growth_cols + variance_cols]
+    )
 
-gstin_cluster.rename(columns={'daily_cluster':'GSTIN_cluster'}, inplace=True)
+    df[count_cols + avg_cols] = RobustScaler().fit_transform(
+        df[count_cols + avg_cols]
+    )
 
-# Merge back to df
-df = df.merge(gstin_cluster, on='GSTIN', how='left')
+    df[ratio_cols + velocity_cols] = StandardScaler().fit_transform(
+        df[ratio_cols + velocity_cols]
+    )
 
-# Now df has both daily and overall GSTIN clusters
-print(df[['GSTIN', 'Date', 'daily_cluster', 'GSTIN_cluster']].head(10))
-print(df[feature_cols].describe())  # check variance
-print(df[feature_cols].head(10))    # see if values are actually diverse
+    df[['filing_delay_days']] = MinMaxScaler().fit_transform(df[['filing_delay_days']])
 
-# check unique daily cluster counts
-print(df['daily_cluster'].value_counts())
-daily_clusters = df.pivot(index='Date', columns='GSTIN', values='daily_cluster')
-print(daily_clusters.head(10))
-gstin_cluster = df.groupby('GSTIN')['daily_cluster'] \
-                  .agg(lambda x: x.value_counts().idxmax()) \
-                  .reset_index()
-gstin_cluster.rename(columns={'daily_cluster':'GSTIN_cluster'}, inplace=True)
+    # --- Feature List ---
+    feature_cols = (
+        amount_cols + count_cols + ratio_cols + velocity_cols +
+        avg_cols + growth_cols + variance_cols + ['filing_delay_days']
+    )
 
-print(gstin_cluster)
-print(df[df['GSTIN']=='B1'][feature_cols].describe())
-print(df[df['GSTIN']=='B13'][feature_cols].describe())
-print(df[df['GSTIN']=='B49'][feature_cols].describe())
-print(df[feature_cols].var())
+    # --- PCA ---
+    pca = PCA(n_components=0.95, random_state=42)
+    pca_values = pca.fit_transform(df[feature_cols])
 
+    # --- Create PCA DataFrame ---
+    pca_cols = [f'PC{i+1}' for i in range(pca_values.shape[1])]
+    df_pca = df[['GSTIN', 'Date']].copy()
+    df_pca[pca_cols] = pca_values
 
-# activity-based cluster score
-df['cluster_score'] = (
-    df['invoice_amount'] +
-    df['upi_inflow'] +
-    df['txn_count'] +
-    df['eway_count'] +
-    df['filing_velocity']
-)
+    return df, df_pca
 
-# 1️⃣ Split GSTINs
-gstins_train, gstins_val = train_test_split(df['GSTIN'].unique(), test_size=0.2, random_state=42)
+def perform_clustering(df, df_pca):
+    from sklearn.cluster import KMeans
 
-gstins_train, gstins_val = train_test_split(df['GSTIN'].unique(), test_size=0.2, random_state=42)
+    # --- Get PCA columns ---
+    pca_cols = [col for col in df_pca.columns if col.startswith('PC')]
 
-X_train = df[df['GSTIN'].isin(gstins_train)][feature_cols]
-y_train = df[df['GSTIN'].isin(gstins_train)]['cluster_score']
+    # --- Fit KMeans ---
+    kmeans = KMeans(n_clusters=5, random_state=42)
+    df_pca['daily_cluster'] = kmeans.fit_predict(df_pca[pca_cols])
 
-X_val = df[df['GSTIN'].isin(gstins_val)][feature_cols]
-y_val = df[df['GSTIN'].isin(gstins_val)]['cluster_score']
+    # --- Merge clusters back to original df ---
+    df = df.merge(
+        df_pca[['GSTIN', 'Date', 'daily_cluster']],
+        on=['GSTIN', 'Date'],
+        how='left'
+    )
 
-reg = XGBRegressor(
-    n_estimators=500,
-    learning_rate=0.05,
-    max_depth=5,
-    random_state=42
-)
+    # --- GSTIN-level cluster (mode) ---
+    gstin_cluster = (
+        df.groupby('GSTIN')['daily_cluster']
+        .agg(lambda x: x.value_counts().idxmax())
+        .reset_index()
+        .rename(columns={'daily_cluster': 'GSTIN_cluster'})
+    )
 
-reg.fit(X_train, y_train)
+    # --- Merge GSTIN cluster ---
+    df = df.merge(gstin_cluster, on='GSTIN', how='left')
 
-y_pred = reg.predict(X_val)
+    return df
 
-mse = mean_squared_error(y_val, y_pred)
-r2 = r2_score(y_val, y_pred)
+def assign_credit_score(df):
 
-print(f"MSE: {mse:.4f}")
-print(f"R2 Score: {r2:.4f}")
-mse = mean_squared_error(y_val, y_pred)
-r2 = r2_score(y_val, y_pred)
+    # average per cluster
+    cluster_quality = df.groupby('GSTIN_cluster')['activity_score'].mean()
 
-print(f"MSE: {mse:.4f}")
-print(f"R2 Score: {r2:.4f}")
+    # DIRECT rank → 1 to 5
+    cluster_scores = cluster_quality.rank(method='dense').astype(int)
 
-df_val = df[df['GSTIN'].isin(gstins_val)].copy()
-df_val['predicted_cluster_score'] = y_pred
+    # map back
+    df['credit_score'] = df['GSTIN_cluster'].map(cluster_scores.to_dict())
 
+    return df
 
-df_val['predicted_cluster_score'] = y_pred
 
-gstin_credit = df_val.groupby('GSTIN')['predicted_cluster_score'].mean().reset_index()
 
-y_min = gstin_credit['predicted_cluster_score'].min()
-y_max = gstin_credit['predicted_cluster_score'].max()
-gstin_credit['predicted_credit_score'] = 1 + (gstin_credit['predicted_cluster_score'] - y_min) * 99 / (y_max - y_min)
-gstin_credit['predicted_credit_score'] = gstin_credit['predicted_credit_score'].round().astype(int)
 
-print(gstin_credit[['GSTIN','predicted_credit_score']])
 
-# 1️⃣ Create TreeExplainer for your trained XGB model
-explainer = shap.Explainer(reg)
 
-# 2️⃣ Compute SHAP values for the validation set
-shap_values = explainer(X_val)
 
-shap_df = pd.DataFrame(shap_values.values, columns=X_val.columns)
-shap_df['GSTIN'] = df_val['GSTIN'].values
-shap_df['predicted_score'] = df_val['predicted_cluster_score'].values
+def train_and_predict(df, feature_cols, n_splits=5):
+    from xgboost import XGBRegressor
+    from sklearn.model_selection import GroupKFold
+    from sklearn.metrics import mean_squared_error
+    import numpy as np
+    import pandas as pd
 
-gstin_shap_summary = shap_df.groupby('GSTIN').apply(
-    lambda x: pd.DataFrame({
-        'mean_abs_shap': x[X_val.columns].abs().mean(),
-        'mean_shap': x[X_val.columns].mean(),
-    })
-)
+    X = df[feature_cols]
+    y = df['credit_score']
+    groups = df['GSTIN']  # ensure GSTINs don't appear in both train and val
 
-def compute_percent(df_gstin):
-    total = df_gstin['mean_abs_shap'].sum()
-    df_gstin['percent_contribution'] = (df_gstin['mean_abs_shap'] / total * 100).round(2)
-    return df_gstin.sort_values('percent_contribution', ascending=False)
+    gkf = GroupKFold(n_splits=n_splits)
+    fold_errors = []
+    gstin_preds_list = []
 
-# Apply to all GSTINs
-final_summary = gstin_shap_summary.groupby('GSTIN', group_keys=False).apply(compute_percent)
+    for fold, (train_idx, val_idx) in enumerate(gkf.split(X, y, groups=groups), 1):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-top_n = 4
-top_features_per_gstin = final_summary.groupby('GSTIN', group_keys=False).head(top_n).reset_index()
-print(top_features_per_gstin)
+        model = XGBRegressor()
+        model.fit(X_train, y_train)
 
+        val_df = df.iloc[val_idx].copy()
+        val_df['pred_score'] = model.predict(X_val)
 
-api_key = os.getenv("OPENAI_API_KEY")
-if api_key is None:
-    raise ValueError("OPENAI_API_KEY is not set!")
+        # GSTIN-level average
+        gstin_scores = val_df.groupby('GSTIN')['pred_score'].mean().reset_index()
+        gstin_preds_list.append(gstin_scores)
 
-client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+        # Fold error
+        mse = mean_squared_error(y_val, val_df['pred_score'])
+        fold_errors.append(mse)
+        print(f"Fold {fold} MSE: {mse}")
 
-def explain_shap_with_llm_top(gstin, shap_summary, predicted_score, top_n=5):
+    print(f"Average MSE across {n_splits} folds: {np.mean(fold_errors)}")
+
+    # Combine all GSTIN-level predictions (for reporting)
+    gstin_preds_df = pd.concat(gstin_preds_list).groupby('GSTIN')['pred_score'].mean().reset_index()
+    gstin_preds_df.rename(columns={'pred_score': 'final_score'}, inplace=True)
+
+    # Return last trained model (or you can return all models if needed) and GSTIN-level predictions
+    return model, gstin_preds_df
+
+
+from sklearn.ensemble import IsolationForest
+
+def detect_fraud_isolation(df, feature_cols, contamination=0.05, random_state=42):
     """
-    Generate LLM explanation of top N SHAP features for a single GSTIN
+    Detects fraudulent GSTINs using Isolation Forest.
+    
+    Returns a dataframe of only GSTINs flagged as fraud.
     """
-    top_features = shap_summary.head(top_n)
+    # Aggregate daily features per GSTIN
+    df_gstin = df.groupby('GSTIN')[feature_cols].mean().reset_index()
     
-    shap_text = "\n".join([
-        f"{feat}: mean_abs_shap={row.mean_abs_shap:.4f}, mean_shap={row.mean_shap:.4f}, percent={row.percent_contribution:.2f}%"
-        for feat, row in top_features.iterrows()
-    ])
+    # Fit Isolation Forest
+    iso = IsolationForest(contamination=contamination, random_state=random_state)
+    df_gstin['fraud_flag'] = iso.fit_predict(df_gstin[feature_cols])
     
-    prompt = f"""
-You are a financial AI assistant. Given the predicted credit score {predicted_score} 
-for GSTIN {gstin} and the following top {top_n} SHAP feature contributions:
+    # Keep only fraud GSTINs
+    fraud_df = df_gstin[df_gstin['fraud_flag'] == -1].copy()
+    
+    return fraud_df[['GSTIN', 'fraud_flag']]
 
-{shap_text}
+fraud_features = [
+    'invoice_amount', 'upi_inflow', 'upi_outflow',
+    'txn_count', 'eway_count', 'activity_score',
+    'rolling_txn_count', 'rolling_avg_inflow', 'rolling_avg_outflow',
+    'inflow_outflow_ratio', 'filing_velocity', 'avg_delay',
+    'invoice_growth_rate', 'inflow_growth_rate', 'shipping_growth',
+    'txn_variance', 'rolling_cashflow_std'
+]
 
-Please generate a concise explanation of:
-- Which features most influence the credit score
-- Which features are positive/negative contributors
-- Overall interpretation in plain English
+
+
+def generate_shap_and_llm(df, model, feature_cols, api_key, gstin_input):
+    import shap
+    import pandas as pd
+    import numpy as np
+    from openai import OpenAI
+
+    # --- 1. Prepare data ---
+    X = df[feature_cols]
+
+    # --- 2. SHAP Explainer ---
+    explainer = shap.Explainer(model)
+    shap_values = explainer(X)
+
+    # --- 3. SHAP DataFrame ---
+    shap_df = pd.DataFrame(shap_values.values, columns=feature_cols)
+    shap_df['GSTIN'] = df['GSTIN'].values
+    shap_df['predicted_score'] = model.predict(X)
+
+    # --- 4. Aggregate per GSTIN ---
+    gstin_shap_summary = shap_df.groupby('GSTIN').apply(
+        lambda x: pd.DataFrame({
+            'mean_abs_shap': x[feature_cols].abs().mean(),
+            'mean_shap': x[feature_cols].mean()
+        })
+    )
+
+    # --- 5. % Contribution ---
+    def compute_percent(df_gstin):
+        total = df_gstin['mean_abs_shap'].sum()
+        df_gstin['percent_contribution'] = (
+            df_gstin['mean_abs_shap'] / total * 100
+        ).round(2)
+        return df_gstin.sort_values('percent_contribution', ascending=False)
+
+    final_summary = gstin_shap_summary.groupby('GSTIN', group_keys=False).apply(compute_percent)
+
+    # --- 6. Top Features ---
+    top_n = 4
+    top_features_per_gstin = final_summary.groupby('GSTIN', group_keys=False).head(top_n).reset_index()
+
+    # --- 7. GSTIN-level predicted score (mean of daily) ---
+    gstin_scores = shap_df.groupby('GSTIN')['predicted_score'].mean().reset_index()
+    gstin_scores.rename(columns={'predicted_score': 'final_score'}, inplace=True)
+
+    # --- 8. LLM Setup ---
+    client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+
+    def explain(gstin, shap_data, score):
+        text = "\n".join([
+            f"{row['level_1']}: contribution={row['percent_contribution']}%, impact={row['mean_shap']:.3f}"
+            for _, row in shap_data.iterrows()
+        ])
+
+        prompt = f"""
+You are a financial AI assistant.
+
+GSTIN: {gstin}
+Predicted Credit Score: {round(score,2)}
+
+Top contributing features:
+{text}
+
+Explain:
+- Key drivers of score
+- Positive vs negative signals
+- Simple business insight
+-also a different explanation of loan recommendation 
 """
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
 
-llm_explanations = []
+        res = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
 
-for gstin in top_features_per_gstin['GSTIN'].unique():
-    top_feats = top_features_per_gstin[top_features_per_gstin['GSTIN']==gstin]
-    predicted_score = gstin_credit[gstin_credit['GSTIN']==gstin]['predicted_credit_score'].values[0]
-    
-    explanation = explain_shap_with_llm_top(
-        gstin=gstin,
-        shap_summary=top_feats,
-        predicted_score=predicted_score,
-        top_n=5
-    )
-    
-    llm_explanations.append({
-        'GSTIN': gstin,
-        'predicted_credit_score': predicted_score,
-        'llm_explanation': explanation
-    })
+        return res.choices[0].message.content
 
-llm_df = pd.DataFrame(llm_explanations)
-print(llm_df.head(1))  
+    # --- 9. Generate LLM Output ---
+    results = []
 
-for idx, row in llm_df.iterrows():
-    print(f"GSTIN: {row['GSTIN']}")
-    print(f"Predicted Credit Score: {row['predicted_credit_score']}")
-    print("Explanation:")
-    print(row['llm_explanation'])  # This will render newlines properly
-    print("-" * 80)  # separator# print one GSTIN nicely
+    # if a specific GSTIN is given, only generate for that GSTIN
+    gstins_to_process = [gstin_input] if gstin_input else top_features_per_gstin['GSTIN'].unique()
+
+    for gstin in gstins_to_process:
+        shap_data = top_features_per_gstin[top_features_per_gstin['GSTIN'] == gstin]
+        score = gstin_scores[gstin_scores['GSTIN'] == gstin]['final_score'].values[0]
+
+        explanation = explain(gstin, shap_data, score)
+
+        results.append({
+            "GSTIN": gstin,
+            "score": round(score, 2),
+            "explanation": explanation
+        })
+
+    llm_df = pd.DataFrame(results)
+
+    return top_features_per_gstin, llm_df
+
+df_raw = generate_raw_data(n_gstin=10, days=30)  # 10 GSTINs, 30 days
+print(df_raw.head())
+df_clean = clean_data(df_raw)
+print(df_clean.isna().sum())
+df_feat = feature_engineering(df_clean)
+print(df_feat.head())
+df_preprocessed, df_pca = preprocess_and_reduce(df_feat)
+print(df_pca.head())
+df_clustered = perform_clustering(df_feat, df_pca)
+print(df_clustered[['GSTIN', 'Date', 'daily_cluster', 'GSTIN_cluster']].head())
+df_scored = assign_credit_score(df_clustered)
+print(df_scored[['GSTIN', 'Date', 'GSTIN_cluster', 'credit_score']].head())
+
+# --- Feature columns for model ---
+feature_cols = [col for col in df_preprocessed.columns if col not in ['GSTIN', 'Date', 'daily_cluster', 'GSTIN_cluster', 'credit_score']]
+
+# --- Train model & predict ---
+model, gstin_scores = train_and_predict(df_scored, feature_cols)
+print(gstin_scores)
+
+# --- SHAP + LLM explanations ---
+# You can set your OpenAI API key here
+api_key = os.getenv("OPENAI_API_KEY")  # or replace with your key directly
+
+top_features, llm_output = generate_shap_and_llm(df_scored, model, feature_cols, api_key,'B0')
+
+print("Top SHAP Features per GSTIN:")
+print(top_features.head())
+
+print("\nLLM Explanations:")
+print(llm_output.head())
+
+fraud_gstins = detect_fraud_isolation(df_scored, fraud_features, contamination=0.1)
+print(fraud_gstins)
+
+
+
