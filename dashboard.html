@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MSME Credit Dashboard</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 20px; 
+            background-color: #f7f9fc;
+            color: #333;
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        h2 {
+            margin-top: 30px;
+            color: #34495e;
+            border-bottom: 2px solid #2980b9;
+            padding-bottom: 5px;
+        }
+        input, button {
+            padding: 8px 12px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #2980b9;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover {
+            background-color: #3498db;
+        }
+        pre {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .section {
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.05);
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        canvas {
+            margin-top: 15px;
+            background: #fff;
+            border-radius: 6px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            padding: 10px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>MSME Credit Dashboard</h1>
+
+    <!-- 1️⃣ Summary -->
+    <div class="section">
+        <h2>Summary</h2>
+        <button onclick="getSummary()">Refresh Summary</button>
+        <pre id="summary">Loading summary...</pre>
+    </div>
+
+    <!-- 2️⃣ GSTIN Detail -->
+    <div class="section">
+        <h2>GSTIN Detail</h2>
+        <div class="input-group">
+            <input type="text" id="gstin" placeholder="Enter GSTIN">
+            <button onclick="getGstinDetail()">Check GSTIN</button>
+        </div>
+        <pre id="gstinDetail"></pre>
+    </div>
+
+    <!-- 3️⃣ GSTIN Daily Charts -->
+    <div class="section">
+        <h2>Daily Charts</h2>
+        <button onclick="getDailyCharts()">Get Daily Charts</button>
+        <canvas id="dailyChart" width="600" height="300"></canvas>
+    </div>
+
+    <!-- 4️⃣ Feature Distribution -->
+    <div class="section">
+        <h2>Feature Distribution</h2>
+        <canvas id="featureChart" width="600" height="300"></canvas>
+    </div>
+
+    <!-- 5️⃣ Activity Score -->
+    <div class="section">
+        <h2>Activity Score</h2>
+        <canvas id="activityChart" width="600" height="300"></canvas>
+    </div>
+
+    <script>
+        const API = "http://127.0.0.1:8000";
+
+        let dailyChart, featureChart, activityChart;
+
+        async function getSummary() {
+            try {
+                const res = await fetch(`${API}/api/summary`);
+                if (!res.ok) throw new Error("Failed to fetch summary");
+                const data = await res.json();
+                document.getElementById("summary").textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById("summary").textContent = `Error: ${err.message}`;
+            }
+        }
+
+        async function getGstinDetail() {
+            const gstin = document.getElementById("gstin").value.trim();
+            if (!gstin) return alert("Enter GSTIN");
+
+            try {
+                const res = await fetch(`${API}/api/gstin/${gstin}`);
+                if (!res.ok) throw new Error("GSTIN not found");
+                const data = await res.json();
+                document.getElementById("gstinDetail").textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById("gstinDetail").textContent = `Error: ${err.message}`;
+            }
+        }
+
+        async function getDailyCharts() {
+            const gstin = document.getElementById("gstin").value.trim();
+            if (!gstin) return alert("Enter GSTIN");
+
+            try {
+                const res = await fetch(`${API}/api/gstin/${gstin}/daily_charts`);
+                if (!res.ok) throw new Error("GSTIN not found");
+                const data = await res.json();
+
+                // Daily inflow/outflow chart
+                const ctx = document.getElementById('dailyChart').getContext('2d');
+                if (dailyChart) dailyChart.destroy();
+                dailyChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.dates,
+                        datasets: [
+                            {
+                                label: 'UPI Inflow',
+                                data: data.upi_inflow,
+                                borderColor: 'green',
+                                fill: false
+                            },
+                            {
+                                label: 'UPI Outflow',
+                                data: data.upi_outflow,
+                                borderColor: 'red',
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { position: 'top' } }
+                    }
+                });
+
+                // Feature distribution (example: eway_count and invoices_count)
+                const fctx = document.getElementById('featureChart').getContext('2d');
+                if (featureChart) featureChart.destroy();
+                featureChart = new Chart(fctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.dates,
+                        datasets: [
+                            { label: 'E-way Count', data: data.eway_count, backgroundColor: '#2980b9' },
+                            { label: 'Invoices Count', data: data.invoices_count, backgroundColor: '#f39c12' }
+                        ]
+                    },
+                    options: { responsive: true, plugins: { legend: { position: 'top' } } }
+                });
+
+                // Activity Score
+                const actx = document.getElementById('activityChart').getContext('2d');
+                if (activityChart) activityChart.destroy();
+                activityChart = new Chart(actx, {
+                    type: 'line',
+                    data: {
+                        labels: data.dates,
+                        datasets: [
+                            { label: 'Activity Score', data: data.activity_scores, borderColor: '#8e44ad', fill: false }
+                        ]
+                    },
+                    options: { responsive: true, plugins: { legend: { position: 'top' } } }
+                });
+
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+
+        // Load summary immediately on page load
+        window.addEventListener("DOMContentLoaded", getSummary);
+    </script>
+</body>
+</html>
